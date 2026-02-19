@@ -41,32 +41,56 @@ jobs:
               "perf", "refactor", "revert", "style", "test", "types"
           }
 
-          match = re.match(r"^([a-z]+)(?:\(([^)]+)\))?:(\s+)(.+)$", title)
-          if not match:
-              fail("缺少或错误的分隔格式")
+          if "：" in title:
+              fail("不正确的:（中文冒号）")
 
-          pr_type, scope, spaces_after_colon, subject = match.groups()
+          if "（" in title or "）" in title:
+              fail("不正确的(): (中文括号)")
 
+          colon_index = title.find(":")
+          if colon_index == -1:
+              fail("缺少type")
+
+          type_part = title[:colon_index].strip()
+          if not type_part:
+              fail("缺少type")
+
+          if colon_index + 1 >= len(title) or title[colon_index + 1] != " ":
+              fail("缺少: 后空格")
+
+          if colon_index + 2 < len(title) and title[colon_index + 2] == " ":
+              fail("缺少: 后空格")
+
+          type_match = re.fullmatch(r"([a-z]+)(?:\(([^)]+)\))?", type_part)
+          if not type_match:
+              fail("不正确的type")
+
+          pr_type, scope = type_match.groups()
           if pr_type not in allowed_types:
-              fail(f'type 不支持: "{pr_type}"')
+              fail("不正确的type")
 
-          if spaces_after_colon != " ":
-              fail("缺少冒号后的单个空格")
+          subject = title[colon_index + 2 :].strip()
+          if not subject:
+              fail("缺少: 后空格")
 
           if scope and not re.fullmatch(r"[A-Za-z0-9._/-]+", scope):
-              fail(f'scope 不合法: "{scope}"')
-
-          if not subject.strip():
-              fail("缺少 subject 内容")
+              fail("不正确的type")
 
           print(f"PR title OK -> type={pr_type}, scope={scope or '-'}, subject={subject}")
           PY
 
           STATUS=${PIPESTATUS[0]}
+
+          COMMENT_FILE="$(mktemp)"
+          grep -E "^PR标题格式：|^当前PR标题：|^问题：" "$LOG_FILE" > "$COMMENT_FILE" || true
+          if [ ! -s "$COMMENT_FILE" ]; then
+            cp "$LOG_FILE" "$COMMENT_FILE"
+          fi
+
           {
             echo "status=${STATUS}"
             echo "error<<EOF"
-            cat "$LOG_FILE"
+            cat "$COMMENT_FILE"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
