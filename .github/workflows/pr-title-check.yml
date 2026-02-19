@@ -26,13 +26,16 @@ jobs:
           import re
           import sys
 
-          def fail(message: str, detail: str | None = None) -> None:
-              print(f"::error title=PR 标题校验失败::{message}")
-              if detail:
-                  print(detail)
+          title = (os.getenv("PR_TITLE") or "").strip()
+          expected_format = "type(scope): subject 或 type: subject"
+
+          def fail(problem: str) -> None:
+              print(f"::error title=PR 标题校验失败::{problem}")
+              print(f"PR标题格式：{expected_format}")
+              print(f"当前PR标题：{title}")
+              print(f"问题：{problem}")
               sys.exit(1)
 
-          title = (os.getenv("PR_TITLE") or "").strip()
           allowed_types = {
               "build", "chore", "ci", "docs", "feat", "fix",
               "perf", "refactor", "revert", "style", "test", "types"
@@ -40,33 +43,21 @@ jobs:
 
           match = re.match(r"^([a-z]+)(?:\(([^)]+)\))?:(\s+)(.+)$", title)
           if not match:
-              fail(
-                  "PR 标题格式错误，应为: type(scope): subject 或 type: subject",
-                  f"例如: feat(api): add login endpoint\n当前标题: {title}",
-              )
+              fail("缺少或错误的分隔格式")
 
           pr_type, scope, spaces_after_colon, subject = match.groups()
 
           if pr_type not in allowed_types:
-              fail(
-                  f'不支持的 type: "{pr_type}"',
-                  "允许的 type: " + ", ".join(sorted(allowed_types)),
-              )
+              fail(f'type 不支持: "{pr_type}"')
 
           if spaces_after_colon != " ":
-              fail(
-                  "格式错误: 冒号后必须有且仅有 1 个空格。",
-                  f"正确示例: feat(api): add login endpoint\n当前标题: {title}",
-              )
+              fail("缺少冒号后的单个空格")
 
           if scope and not re.fullmatch(r"[A-Za-z0-9._/-]+", scope):
-              fail(
-                  f'scope 不合法: "{scope}"',
-                  "scope 仅允许英文、数字、点(.)、下划线(_) 、斜杠(/) 、中划线(-)",
-              )
+              fail(f'scope 不合法: "{scope}"')
 
           if not subject.strip():
-              fail("subject 不能为空")
+              fail("缺少 subject 内容")
 
           print(f"PR title OK -> type={pr_type}, scope={scope or '-'}, subject={subject}")
           PY
