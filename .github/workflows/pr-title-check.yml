@@ -18,6 +18,12 @@ jobs:
           import re
           import sys
 
+          def fail(message: str, detail: str | None = None) -> None:
+              print(f"::error title=PR 标题校验失败::{message}")
+              if detail:
+                  print(detail)
+              sys.exit(1)
+
           title = (os.getenv("PR_TITLE") or "").strip()
           allowed_types = {
               "build", "chore", "ci", "docs", "feat", "fix",
@@ -26,32 +32,33 @@ jobs:
 
           match = re.match(r"^([a-z]+)(?:\(([^)]+)\))?:(\s+)(.+)$", title)
           if not match:
-              print("PR 标题格式错误，应为: type(scope): subject 或 type: subject")
-              print("例如: feat(api): add login endpoint")
-              print(f"当前标题: {title}")
-              sys.exit(1)
+              fail(
+                  "PR 标题格式错误，应为: type(scope): subject 或 type: subject",
+                  f"例如: feat(api): add login endpoint\n当前标题: {title}",
+              )
 
           pr_type, scope, spaces_after_colon, subject = match.groups()
 
           if pr_type not in allowed_types:
-              print(f'不支持的 type: "{pr_type}"')
-              print("允许的 type: " + ", ".join(sorted(allowed_types)))
-              sys.exit(1)
+              fail(
+                  f'不支持的 type: "{pr_type}"',
+                  "允许的 type: " + ", ".join(sorted(allowed_types)),
+              )
 
           if spaces_after_colon != " ":
-              print("格式错误: 冒号后必须有且仅有 1 个空格。")
-              print("正确示例: feat(api): add login endpoint")
-              print(f"当前标题: {title}")
-              sys.exit(1)
+              fail(
+                  "格式错误: 冒号后必须有且仅有 1 个空格。",
+                  f"正确示例: feat(api): add login endpoint\n当前标题: {title}",
+              )
 
           if scope and not re.fullmatch(r"[A-Za-z0-9._/-]+", scope):
-              print(f'scope 不合法: "{scope}"')
-              print("scope 仅允许英文、数字、点(.)、下划线(_) 、斜杠(/) 、中划线(-)")
-              sys.exit(1)
+              fail(
+                  f'scope 不合法: "{scope}"',
+                  "scope 仅允许英文、数字、点(.)、下划线(_) 、斜杠(/) 、中划线(-)",
+              )
 
           if not subject.strip():
-              print("subject 不能为空")
-              sys.exit(1)
+              fail("subject 不能为空")
 
           print(f"PR title OK -> type={pr_type}, scope={scope or '-'}, subject={subject}")
           PY
