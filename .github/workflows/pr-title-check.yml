@@ -1,9 +1,5 @@
 name: PR标题校验
 
-permissions:
-  contents: read
-  pull-requests: write
-
 on:
   pull_request:
     types: [opened, edited, reopened]
@@ -15,123 +11,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 使用Python校验PR标题
-        id: validate
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          set +e
-          LOG_FILE="$(mktemp)"
-
-          python3 - <<'PY' 2>&1 | tee "$LOG_FILE"
+          python3 - <<'PY'
           import os
           import re
           import sys
 
           title = (os.getenv("PR_TITLE") or "").strip()
-          expected_format = "type(scope): subject 或 type: subject"
-
-          def fail(problem: str) -> None:
-              print(f"::error title=PR 标题校验失败::{problem}")
-              print(f"PR标题格式：{expected_format}")
-              print(f"当前PR标题：{title}")
-              print(f"问题：{problem}")
-              sys.exit(1)
-
           allowed_types = {
               "build", "chore", "ci", "docs", "feat", "fix",
               "perf", "refactor", "revert", "style", "test", "types"
           }
 
-          if "：" in title:
-              fail("不正确的:（中文冒号）")
+          match = re.fullmatch(r"([a-z]+)(?:\(([^)]+)\))?: (.+)", title)
+          if not match:
+              print("PR格式有误，应为type(scope): subject 或 type: subject")
+              sys.exit(1)
 
-          if "（" in title or "）" in title:
-              fail("不正确的(): (中文括号)")
-
-          colon_index = title.find(":")
-          if colon_index == -1:
-              fail("缺少type")
-
-          type_part = title[:colon_index].strip()
-          if not type_part:
-              fail("缺少type")
-
-          if colon_index + 1 >= len(title) or title[colon_index + 1] != " ":
-              fail("缺少: 后空格")
-
-          if colon_index + 2 < len(title) and title[colon_index + 2] == " ":
-              fail("缺少: 后空格")
-
-          type_match = re.fullmatch(r"([a-z]+)(?:\(([^)]+)\))?", type_part)
-          if not type_match:
-              fail("不正确的type")
-
-          pr_type, scope = type_match.groups()
-          if pr_type not in allowed_types:
-              fail("不正确的type")
-
-          subject = title[colon_index + 2 :].strip()
-          if not subject:
-              fail("缺少: 后空格")
-
-          if scope and not re.fullmatch(r"[A-Za-z0-9._/-]+", scope):
-              fail("不正确的type")
-
-          print(f"PR title OK -> type={pr_type}, scope={scope or '-'}, subject={subject}")
+          pr_type, scope, subject = match.groups()
+          if pr_type not in allowed_types or (scope and not re.fullmatch(r"[A-Za-z0-9._/-]+", scope)) or not subject.strip():
+              print("PR格式有误，应为type(scope): subject 或 type: subject")
+              sys.exit(1)
           PY
-
-          STATUS=${PIPESTATUS[0]}
-          {
-            echo "status=${STATUS}"
-            echo "error<<EOF"
-            cat "$LOG_FILE"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          exit 0
-
-      - name: 在PR中展示失败原因
-        if: steps.validate.outputs.status != '0'
-        uses: actions/github-script@v7
-        env:
-          ERROR_MESSAGE: ${{ steps.validate.outputs.error }}
-        with:
-          script: |
-            const marker = '<!-- pr-title-check-error -->';
-            const title = '### ❌ PR 标题校验失败';
-            const errorText = (process.env.ERROR_MESSAGE || 'unknown error').trim();
-            const body = `${marker}\n${title}\n\n\`\`\`text\n${errorText}\n\`\`\``;
-
-            const issue_number = context.payload.pull_request.number;
-            const { owner, repo } = context.repo;
-
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number,
-              per_page: 100,
-            });
-
-            const existing = comments.find((c) =>
-              c.user?.type === 'Bot' && c.body?.includes(marker)
-            );
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner,
-                repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number,
-                body,
-              });
-            }
-
-      - name: 校验失败时终止任务
-        if: steps.validate.outputs.status != '0'
-        run: exit 1
