@@ -68,34 +68,9 @@ jobs:
                 .filter(number => Number.isInteger(number))
             )];
 
-            // 兜底：timeline connected 事件（非强依赖，防止某些历史链接来源遗漏）。
-            let timelineConnectedIssues = [];
-            try {
-              const timelineEvents = await github.paginate(
-                github.rest.issues.listEventsForTimeline,
-                {
-                  owner,
-                  repo,
-                  issue_number: pr.number,
-                  per_page: 100,
-                  mediaType: { previews: ["mockingbird"] }
-                }
-              );
-
-              timelineConnectedIssues = [...new Set(
-                timelineEvents
-                  .filter(event => event.event === "connected")
-                  .map(event => event.source?.issue?.number)
-                  .filter(number => Number.isInteger(number))
-              )];
-            } catch (error) {
-              core.warning(`读取 timeline 事件失败，已忽略该来源：${error.message}`);
-            }
-
             const linkedIssues = [...new Set([
               ...closingIssueNumbers,
-              ...keywordLinkedIssues,
-              ...timelineConnectedIssues
+              ...keywordLinkedIssues
             ])];
 
             if (linkedIssues.length === 0) {
