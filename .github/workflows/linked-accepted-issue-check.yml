@@ -98,12 +98,6 @@ jobs:
               ...timelineConnectedIssues
             ])];
 
-            core.info(`PR body: ${JSON.stringify(body)}`);
-            core.info(`closingIssueNumbers: ${JSON.stringify(closingIssueNumbers)}`);
-            core.info(`keywordLinkedIssues: ${JSON.stringify(keywordLinkedIssues)}`);
-            core.info(`timelineConnectedIssues: ${JSON.stringify(timelineConnectedIssues)}`);
-            core.info(`linkedIssues: ${JSON.stringify(linkedIssues)}`);
-
             if (linkedIssues.length === 0) {
               core.setFailed("❌ PR 必须关联至少一个 Issue（请使用 Closes #123）");
               return;
