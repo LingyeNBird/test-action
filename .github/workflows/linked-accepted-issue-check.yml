@@ -22,34 +22,81 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            // 抓取全部 timeline 事件，避免分页遗漏。
-            const timelineEvents = await github.paginate(
-              github.rest.issues.listEventsForTimeline,
+            // 主路径：使用 GraphQL closingIssuesReferences 获取 PR 当前关联的 Issue。
+            const prGraph = await github.graphql(
+              `query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    closingIssuesReferences(first: 100) {
+                      nodes {
+                        number
+                      }
+                    }
+                    userLinkedClosingIssues: closingIssuesReferences(first: 100, userLinkedOnly: true) {
+                      nodes {
+                        number
+                      }
+                    }
+                  }
+                }
+              }`,
               {
                 owner,
                 repo,
-                issue_number: pr.number,
-                per_page: 100,
-                mediaType: { previews: ["mockingbird"] }
+                number: pr.number
               }
             );
 
-            const connectedIssues = [...new Set(
-              timelineEvents
-                .filter(event => event.event === "connected")
-                .map(event => event.source?.issue?.number)
-                .filter(number => Number.isInteger(number))
-            )];
+            const closingIssueNumbers = [
+              ...(prGraph.repository?.pullRequest?.closingIssuesReferences?.nodes || []),
+              ...(prGraph.repository?.pullRequest?.userLinkedClosingIssues?.nodes || [])
+            ]
+              .map(node => node?.number)
+              .filter(number => Number.isInteger(number));
+
+            const { data: latestPr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number
+            });
 
             // 兼容 PR 描述中通过 Closes/Fixes/Resolves #123 关联 issue 的场景。
-            const body = pr.body || "";
+            const body = latestPr.body || "";
             const keywordLinkedIssues = [...new Set(
               [...body.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)\b/gi)]
                 .map(match => Number(match[1]))
                 .filter(number => Number.isInteger(number))
             )];
 
-            const linkedIssues = [...new Set([...connectedIssues, ...keywordLinkedIssues])];
+            // 兜底：timeline connected 事件（非强依赖，防止某些历史链接来源遗漏）。
+            let timelineConnectedIssues = [];
+            try {
+              const timelineEvents = await github.paginate(
+                github.rest.issues.listEventsForTimeline,
+                {
+                  owner,
+                  repo,
+                  issue_number: pr.number,
+                  per_page: 100,
+                  mediaType: { previews: ["mockingbird"] }
+                }
+              );
+
+              timelineConnectedIssues = [...new Set(
+                timelineEvents
+                  .filter(event => event.event === "connected")
+                  .map(event => event.source?.issue?.number)
+                  .filter(number => Number.isInteger(number))
+              )];
+            } catch (error) {
+              core.warning(`读取 timeline 事件失败，已忽略该来源：${error.message}`);
+            }
+
+            const linkedIssues = [...new Set([
+              ...closingIssueNumbers,
+              ...keywordLinkedIssues,
+              ...timelineConnectedIssues
+            ])];
 
             if (linkedIssues.length === 0) {
               core.setFailed("❌ PR 必须关联至少一个 Issue（请使用 Closes #123）");
