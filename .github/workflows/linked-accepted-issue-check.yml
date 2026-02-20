@@ -41,14 +41,24 @@ jobs:
                 .filter(number => Number.isInteger(number))
             )];
 
-            if (connectedIssues.length === 0) {
+            // 兼容 PR 描述中通过 Closes/Fixes/Resolves #123 关联 issue 的场景。
+            const body = pr.body || "";
+            const keywordLinkedIssues = [...new Set(
+              [...body.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)\b/gi)]
+                .map(match => Number(match[1]))
+                .filter(number => Number.isInteger(number))
+            )];
+
+            const linkedIssues = [...new Set([...connectedIssues, ...keywordLinkedIssues])];
+
+            if (linkedIssues.length === 0) {
               core.setFailed("❌ PR 必须关联至少一个 Issue（请使用 Closes #123）");
               return;
             }
 
             let valid = false;
 
-            for (const issueNumber of connectedIssues) {
+            for (const issueNumber of linkedIssues) {
               const { data: issue } = await github.rest.issues.get({
                 owner,
                 repo,
