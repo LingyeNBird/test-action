@@ -21,6 +21,19 @@ jobs:
             const pr = context.payload.pull_request;
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            const ownerLower = owner.toLowerCase();
+            const repoLower = repo.toLowerCase();
+            const repoFullName = `${ownerLower}/${repoLower}`;
+
+            const isSameRepoIssue = issue => {
+              const repoUrl = `${issue?.repository_url || ""}`.toLowerCase();
+              if (repoUrl) {
+                return repoUrl.endsWith(`/${repoFullName}`);
+              }
+
+              const issueUrl = `${issue?.url || ""}`.toLowerCase();
+              return issueUrl.includes(`/repos/${repoFullName}/issues/`);
+            };
 
             // 主路径：使用 GraphQL closingIssuesReferences 获取 PR 当前关联的 Issue。
             const prGraph = await github.graphql(
@@ -30,11 +43,17 @@ jobs:
                     closingIssuesReferences(first: 100) {
                       nodes {
                         number
+                        repository {
+                          nameWithOwner
+                        }
                       }
                     }
                     userLinkedClosingIssues: closingIssuesReferences(first: 100, userLinkedOnly: true) {
                       nodes {
                         number
+                        repository {
+                          nameWithOwner
+                        }
                       }
                     }
                   }
@@ -51,6 +70,10 @@ jobs:
               ...(prGraph.repository?.pullRequest?.closingIssuesReferences?.nodes || []),
               ...(prGraph.repository?.pullRequest?.userLinkedClosingIssues?.nodes || [])
             ]
+              .filter(node => {
+                const nodeRepo = `${node?.repository?.nameWithOwner || ""}`.toLowerCase();
+                return nodeRepo === repoFullName;
+              })
               .map(node => node?.number)
               .filter(number => Number.isInteger(number));
 
@@ -60,32 +83,109 @@ jobs:
               pull_number: pr.number
             });
 
-            // 兼容 PR 描述中通过 Closes/Fixes/Resolves #123 关联 issue 的场景。
+            // 支持 PR 描述中的本仓库 issue 引用（不限 closes/fixes 语义）。
             const body = latestPr.body || "";
             const keywordLinkedIssues = [...new Set(
-              [...body.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s*#(\d+)\b/gi)]
+              [...body.matchAll(/(?:^|[^A-Za-z0-9_./-])#(\d+)\b/g)]
                 .map(match => Number(match[1]))
                 .filter(number => Number.isInteger(number))
             )];
 
+            // timeline 用于识别“关系”而非仅 closing：
+            // - connected/disconnected 按时间顺序折叠为当前连接状态
+            // - cross-referenced / referenced 视为存在关系
+            let timelineRelatedIssues = [];
+            try {
+              const timelineEvents = await github.paginate(
+                github.rest.issues.listEventsForTimeline,
+                {
+                  owner,
+                  repo,
+                  issue_number: pr.number,
+                  per_page: 100,
+                  mediaType: { previews: ["mockingbird"] }
+                }
+              );
+
+              timelineEvents.sort((a, b) => {
+                const timeA = new Date(a.created_at || 0).getTime();
+                const timeB = new Date(b.created_at || 0).getTime();
+                if (timeA !== timeB) {
+                  return timeA - timeB;
+                }
+
+                return (a.id || 0) - (b.id || 0);
+              });
+
+              const connectedSet = new Set();
+              const referencedSet = new Set();
+
+              for (const event of timelineEvents) {
+                const sourceIssue = event.source?.issue;
+                const issueNumber = sourceIssue?.number;
+                if (!Number.isInteger(issueNumber)) {
+                  continue;
+                }
+
+                if (!isSameRepoIssue(sourceIssue)) {
+                  continue;
+                }
+
+                // 仅接受普通 Issue，不把 PR 当成 Issue 关系来源。
+                if (sourceIssue.pull_request) {
+                  continue;
+                }
+
+                if (event.event === "connected") {
+                  connectedSet.add(issueNumber);
+                  continue;
+                }
+
+                if (event.event === "disconnected") {
+                  connectedSet.delete(issueNumber);
+                  continue;
+                }
+
+                if (event.event === "cross-referenced" || event.event === "referenced") {
+                  referencedSet.add(issueNumber);
+                }
+              }
+
+              timelineRelatedIssues = [...new Set([...connectedSet, ...referencedSet])];
+            } catch (error) {
+              core.warning(`读取 timeline 关系失败，已忽略该来源：${error.message}`);
+            }
+
             const linkedIssues = [...new Set([
               ...closingIssueNumbers,
-              ...keywordLinkedIssues
+              ...keywordLinkedIssues,
+              ...timelineRelatedIssues
             ])];
 
             if (linkedIssues.length === 0) {
-              core.setFailed("❌ PR 必须关联至少一个 Issue（请使用 Closes #123）");
+              core.setFailed(
+                "❌ PR 必须与至少一个本仓库 Issue 建立关系（关联/引用均可，例如在描述中写 #123）"
+              );
               return;
             }
 
             let valid = false;
+            let unreadableIssueCount = 0;
 
             for (const issueNumber of linkedIssues) {
-              const { data: issue } = await github.rest.issues.get({
-                owner,
-                repo,
-                issue_number: issueNumber
-              });
+              let issue;
+              try {
+                const result = await github.rest.issues.get({
+                  owner,
+                  repo,
+                  issue_number: issueNumber
+                });
+                issue = result.data;
+              } catch (error) {
+                unreadableIssueCount += 1;
+                core.warning(`无法读取 Issue #${issueNumber}：${error.message}`);
+                continue;
+              }
 
               // 仅接受普通 Issue，不把 PR 当成 Issue 通过条件。
               if (issue.pull_request) {
@@ -95,7 +195,7 @@ jobs:
 
               const hasAccepted = issue.labels.some(label => {
                 const labelName = typeof label === "string" ? label : label.name;
-                return labelName === "accepted";
+                return `${labelName || ""}`.trim().toLowerCase() === "accepted";
               });
 
               if (issue.state === "open" && hasAccepted) {
@@ -110,6 +210,10 @@ jobs:
             }
 
             if (!valid) {
+              if (unreadableIssueCount > 0) {
+                core.info(`注意：有 ${unreadableIssueCount} 个 Issue 无法读取，已跳过。`);
+              }
+
               core.setFailed(
                 "❌ 所有关联的 Issue 中，没有一个同时满足 open 且包含 'accepted' 标签"
               );
