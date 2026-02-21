@@ -55,7 +55,7 @@ jobs:
               .filter(i => `${i.repository.nameWithOwner}`.toLowerCase() === repoFull);
 
             if (issues.length === 0) {
-              core.setFailed("❌ PR 必须关联至少一个 Issue（手动 Link 或 closes/fixes 关键字）");
+              core.setFailed("❌ PR 必须关联至少一个 Issue");
               return;
             }
 
