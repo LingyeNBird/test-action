@@ -19,7 +19,7 @@ jobs:
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
 
-            // 获取所有 closing issues（包括手动 link + closes/fixes 关键字）
+            // 获取所有关联的 issues
             const query = `
               query($owner:String!, $repo:String!, $number:Int!) {
                 repository(owner:$owner, name:$repo) {
