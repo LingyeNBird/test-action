@@ -1,0 +1,65 @@
+name: Sync Release To CNB
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to sync (for example: v1.0.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-release-to-cnb
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Clone code-import
+        run: git clone https://cnb.cool/SeaLantern-studio/code-import
+
+      - name: Download dependencies
+        working-directory: code-import
+        run: go mod download
+
+      - name: Sync latest release (release event)
+        if: github.event_name == 'release'
+        working-directory: code-import
+        env:
+          PLUGIN_SOURCE_URL: https://github.com
+          PLUGIN_SOURCE_PLATFORM: github
+          PLUGIN_SOURCE_REPO: LingyeNBird/test-action
+          PLUGIN_CNB_ROOT_ORGANIZATION: SeaLantern-studio
+          PLUGIN_MIGRATE_ORGANIZATION_MAPPING_LEVEL: "2"
+          PLUGIN_MIGRATE_RELEASE: "true"
+          PLUGIN_CNB_URL: https://cnb.cool
+          PLUGIN_SOURCE_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+          PLUGIN_CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: go run .
+
+      - name: Sync specified tag (manual trigger)
+        if: github.event_name == 'workflow_dispatch'
+        working-directory: code-import
+        env:
+          PLUGIN_SOURCE_URL: https://github.com
+          PLUGIN_SOURCE_PLATFORM: github
+          PLUGIN_SOURCE_REPO: SeaLantern-Studio/SeaLantern
+          PLUGIN_CNB_ROOT_ORGANIZATION: SeaLantern-studio
+          PLUGIN_MIGRATE_ORGANIZATION_MAPPING_LEVEL: "2"
+          PLUGIN_MIGRATE_RELEASE: "true"
+          PLUGIN_MIGRATE_RELEASE_TAG: ${{ inputs.tag }}
+          PLUGIN_CNB_URL: https://cnb.cool
+          PLUGIN_SOURCE_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+          PLUGIN_CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: go run .
