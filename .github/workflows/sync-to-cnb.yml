@@ -54,7 +54,7 @@ jobs:
         env:
           PLUGIN_SOURCE_URL: https://github.com
           PLUGIN_SOURCE_PLATFORM: github
-          PLUGIN_SOURCE_REPO: SeaLantern-Studio/SeaLantern
+          PLUGIN_SOURCE_REPO: LingyeNBird/test-action
           PLUGIN_CNB_ROOT_ORGANIZATION: SeaLantern-studio
           PLUGIN_MIGRATE_ORGANIZATION_MAPPING_LEVEL: "2"
           PLUGIN_MIGRATE_RELEASE: "true"
