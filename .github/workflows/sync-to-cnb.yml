@@ -27,7 +27,7 @@ jobs:
           go-version: "1.23.x"
 
       - name: Clone code-import
-        run: git clone https://cnb.cool/SeaLantern-studio/code-import
+        run: git clone https://github.com/LingyeNBird/code-import.git
 
       - name: Download dependencies
         working-directory: code-import
