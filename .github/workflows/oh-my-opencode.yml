@@ -190,56 +190,55 @@ jobs:
             -X POST -f content="eyes" || true
       - name: Run oh-my-opencode on target repo only
         env:
-          GH_TOKEN: ${{ github.token }}
-          RIGHTCODE_API_KEY: ${{ secrets.RIGHTCODE_API_KEY }}
-          RIGHTCODE_BASE_URL: ${{ secrets.RIGHTCODE_BASE_URL }}
-          RIGHTCODE_PROVIDER_ID: ${{ secrets.RIGHTCODE_PROVIDER_ID }}
-          RIGHTCODE_MODEL_ID: ${{ secrets.RIGHTCODE_MODEL_ID }}
-          USER_COMMENT: ${{ steps.ctx.outputs.comment }}
-          CONTEXT_TYPE: ${{ steps.ctx.outputs.type }}
-          CONTEXT_NUMBER: ${{ steps.ctx.outputs.number }}
-          CONTEXT_TITLE: ${{ steps.ctx.outputs.title }}
-          COMMENT_AUTHOR: ${{ steps.ctx.outputs.author }}
-          REPO_NAME: ${{ github.repository }}
-          DEFAULT_BRANCH: ${{ steps.ctx.outputs.default_branch }}
+            GH_TOKEN: ${{ github.token }}
+            RIGHTCODE_API_KEY: ${{ secrets.RIGHTCODE_API_KEY }}
+            RIGHTCODE_BASE_URL: ${{ secrets.RIGHTCODE_BASE_URL }}
+            RIGHTCODE_PROVIDER_ID: ${{ secrets.RIGHTCODE_PROVIDER_ID }}
+            RIGHTCODE_MODEL_ID: ${{ secrets.RIGHTCODE_MODEL_ID }}
+            USER_COMMENT: ${{ steps.ctx.outputs.comment }}
+            CONTEXT_TYPE: ${{ steps.ctx.outputs.type }}
+            CONTEXT_NUMBER: ${{ steps.ctx.outputs.number }}
+            CONTEXT_TITLE: ${{ steps.ctx.outputs.title }}
+            COMMENT_AUTHOR: ${{ steps.ctx.outputs.author }}
+            REPO_NAME: ${{ github.repository }}
+            DEFAULT_BRANCH: ${{ steps.ctx.outputs.default_branch }}
+            OPENCODE_DEFAULT_AGENT: Sisyphus
         run: |
-          set -euo pipefail
-          export PATH="$HOME/.bun/bin:$HOME/.opencode/bin:$PATH"
-          if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+            set -euo pipefail
+            export PATH="$HOME/.bun/bin:$HOME/.opencode/bin:$PATH"
+            # CRITICAL: force working dir to target repo
+            cd "$GITHUB_WORKSPACE"
+            if [[ "$CONTEXT_TYPE" == "pr" ]]; then
             COMMENT_CMD="gh pr comment ${CONTEXT_NUMBER} --repo ${REPO_NAME} --body"
-          elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
+            elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
             COMMENT_CMD="gh issue comment ${CONTEXT_NUMBER} --repo ${REPO_NAME} --body"
-          else
+            else
             COMMENT_CMD="echo"
-          fi
-          PROMPT=$(cat <<EOF
-          [analyze-mode]
-          ANALYSIS MODE. Gather context before diving deep:
-          - Use parallel exploration (explore/librarian + direct tools)
-          - Synthesize findings
-          - Then implement fully and verify
-          Context:
-          - Repo: ${REPO_NAME}
-          - Type: ${CONTEXT_TYPE}
-          - Number: #${CONTEXT_NUMBER}
-          - Title: ${CONTEXT_TITLE}
-          - Default branch: ${DEFAULT_BRANCH}
-          - Requested by: @${COMMENT_AUTHOR}
-          User request:
-          ${USER_COMMENT}
-          Hard requirements:
-          1) User cannot see console. MUST post progress + final result as GitHub comments.
-          2) Use heredoc for multiline comments.
-          3) For code changes, NEVER push directly to ${DEFAULT_BRANCH}; use branch + PR.
-          4) Use this comment command: ${COMMENT_CMD}
-          EOF
-          )
-          # CRITICAL: force target repository as working directory
-          oh-my-opencode run \
-            --agent Sisyphus \
-            --directory "$GITHUB_WORKSPACE" \
-            --timeout 3600000 \
-            "$PROMPT"
+            fi
+            PROMPT=$(cat <<EOF
+            [analyze-mode]
+            ANALYSIS MODE. Gather context before diving deep:
+            - Use parallel exploration (explore/librarian + direct tools)
+            - Synthesize findings
+            - Then implement fully and verify
+            Context:
+            - Repo: ${REPO_NAME}
+            - Type: ${CONTEXT_TYPE}
+            - Number: #${CONTEXT_NUMBER}
+            - Title: ${CONTEXT_TITLE}
+            - Default branch: ${DEFAULT_BRANCH}
+            - Requested by: @${COMMENT_AUTHOR}
+            User request:
+            ${USER_COMMENT}
+            Hard requirements:
+            1) User cannot see console. MUST post progress + final result as GitHub comments.
+            2) Use heredoc for multiline comments.
+            3) For code changes, NEVER push directly to ${DEFAULT_BRANCH}; use branch + PR.
+            4) Use this comment command: ${COMMENT_CMD}
+            EOF
+            )
+            # Do NOT pass --directory/--timeout here (compat issue)
+            oh-my-opencode run "$PROMPT"
       - name: Replace eyes with +1
         if: steps.ctx.outputs.comment_id != ''
         env:
