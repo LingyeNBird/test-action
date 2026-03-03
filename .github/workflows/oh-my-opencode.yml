@@ -231,7 +231,7 @@ jobs:
           - DO NOT post progress comments.
           - Post EXACTLY ONE final GitHub comment using: ${COMMENT_CMD}
           - For multiline, use heredoc body.
-          - The final comment must contain actionable content (not status text), and when issue history is requested include sections: ## Issue Record, ## Timeline, ## Recent Comments.
+          - The final comment should provide a clear and complete result summary relevant to the user's request.
           - After posting the final comment, verify it exists with gh api read-back, then output <promise>${PROMISE_TAG}</promise>.
           - Do not output the promise before the final comment is successfully posted and verified.
           - If code changes are required, do not push directly to ${DEFAULT_BRANCH}; use branch + PR.
