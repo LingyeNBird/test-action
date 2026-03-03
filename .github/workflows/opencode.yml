@@ -28,10 +28,9 @@ jobs:
       - name: Run opencode
         uses: anomalyco/opencode/github@latest
         env:
-           # 你的供应商 key（在 GitHub Secrets 里新建 RIGHTCODE_API_KEY）
           RIGHTCODE_API_KEY: ${{ secrets.RIGHTCODE_API_KEY }}
-          # 注入 OpenCode 配置：自定义 provider + baseURL + model
+          RIGHTCODE_BASE_URL: ${{ secrets.RIGHTCODE_BASE_URL }}
           OPENCODE_CONFIG_CONTENT: >-
-            {"$schema":"https://opencode.ai/config.json","provider":{"rightCode":{"name":"rightCode","npm":"@ai-sdk/openai-compatible","api":"https://right.codes/codex/v1","env":["RIGHTCODE_API_KEY"],"options":{"apiKey":"{env:RIGHTCODE_API_KEY}","baseURL":"https://right.codes/codex/v1"},"models":{"gpt-5.3-codex-high":{"name":"gpt-5.3-codex-high"}}}}}
+            {"$schema":"https://opencode.ai/config.json","provider":{"${{ secrets.RIGHTCODE_PROVIDER_ID }}":{"name":"${{ secrets.RIGHTCODE_PROVIDER_ID }}","npm":"@ai-sdk/openai-compatible","api":"{env:RIGHTCODE_BASE_URL}","env":["RIGHTCODE_API_KEY"],"options":{"apiKey":"{env:RIGHTCODE_API_KEY}","baseURL":"{env:RIGHTCODE_BASE_URL}"},"models":{"${{ secrets.RIGHTCODE_MODEL_ID }}":{"name":"${{ secrets.RIGHTCODE_MODEL_ID }}"}}}}}
         with:
-          model: rightCode/gpt-5.3-codex-high
+          model: ${{ format('{0}/{1}', secrets.RIGHTCODE_PROVIDER_ID, secrets.RIGHTCODE_MODEL_ID) }}
