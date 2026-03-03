@@ -1,0 +1,254 @@
+name: oh-my-opencode-rightcode
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Manual prompt"
+        required: false
+        type: string
+  issue_comment:
+    types: [created]
+jobs:
+  agent:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+       (contains(github.event.comment.body || '', ' /oc') ||
+        startsWith(github.event.comment.body || '', '/oc') ||
+        contains(github.event.comment.body || '', ' /opencode') ||
+        startsWith(github.event.comment.body || '', '/opencode')) &&
+       (github.event.comment.user.login || '') != 'github-actions[bot]' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || ''))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache Bun and OpenCode
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            ~/.opencode/bin
+          key: ${{ runner.os }}-omo-rightcode-v1
+          restore-keys: |
+            ${{ runner.os }}-omo-rightcode-
+      - name: Install OpenCode
+        run: |
+          set -euo pipefail
+          if ! command -v opencode >/dev/null 2>&1; then
+            curl -fsSL https://opencode.ai/install | bash
+          fi
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+      - name: Clone, build, pack, install oh-my-opencode, then cleanup source
+        run: |
+          set -euo pipefail
+          SRC="/tmp/oh-my-opencode-src"
+          rm -rf "$SRC"
+          git clone --depth 1 https://github.com/code-yeongyu/oh-my-opencode.git "$SRC"
+          cd "$SRC"
+          bun install
+          bun run build
+          PKG_TGZ="$(npm pack --silent)"
+          bun add -g "$SRC/$PKG_TGZ"
+          # CRITICAL: delete cloned source to avoid review interference
+          rm -rf "$SRC"
+          test ! -d "$SRC"
+      - name: Install oh-my-opencode config and patch RightCode provider
+        env:
+          RIGHTCODE_API_KEY: ${{ secrets.RIGHTCODE_API_KEY }}
+          RIGHTCODE_BASE_URL: ${{ secrets.RIGHTCODE_BASE_URL }}
+          RIGHTCODE_PROVIDER_ID: ${{ secrets.RIGHTCODE_PROVIDER_ID }}
+          RIGHTCODE_MODEL_ID: ${{ secrets.RIGHTCODE_MODEL_ID }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.bun/bin:$HOME/.opencode/bin:$PATH"
+          oh-my-opencode install \
+            --no-tui \
+            --claude=no \
+            --openai=no \
+            --gemini=no \
+            --copilot=no \
+            --opencode-zen=no \
+            --zai-coding-plan=no \
+            --kimi-for-coding=no \
+            --skip-auth
+          OPENCODE_JSON="$HOME/.config/opencode/opencode.json"
+          OMO_JSON="$HOME/.config/opencode/oh-my-opencode.json"
+          MODEL_PATH="${RIGHTCODE_PROVIDER_ID}/${RIGHTCODE_MODEL_ID}"
+          # OpenCode provider/model -> RightCode (OpenAI-compatible)
+          jq \
+            --arg pid "$RIGHTCODE_PROVIDER_ID" \
+            --arg mid "$RIGHTCODE_MODEL_ID" \
+            '
+            .model = ($pid + "/" + $mid)
+            | .provider = (.provider // {})
+            | .provider[$pid] = {
+                "name": $pid,
+                "npm": "@ai-sdk/openai-compatible",
+                "api": "{env:RIGHTCODE_BASE_URL}",
+                "env": ["RIGHTCODE_API_KEY", "RIGHTCODE_BASE_URL"],
+                "options": {
+                  "apiKey": "{env:RIGHTCODE_API_KEY}",
+                  "baseURL": "{env:RIGHTCODE_BASE_URL}"
+                },
+                "models": {
+                  ($mid): { "id": $mid, "name": $mid }
+                }
+              }
+            ' "$OPENCODE_JSON" > /tmp/opencode.json
+          mv /tmp/opencode.json "$OPENCODE_JSON"
+          # Force oh-my-opencode agents/categories to your model
+          jq \
+            --arg m "$MODEL_PATH" \
+            '
+            .default_run_agent = "Sisyphus"
+            | .agents = ((.agents // {}) + {
+                "build": {"model": $m},
+                "plan": {"model": $m},
+                "sisyphus": {"model": $m},
+                "hephaestus": {"model": $m},
+                "prometheus": {"model": $m},
+                "oracle": {"model": $m},
+                "librarian": {"model": $m},
+                "explore": {"model": $m},
+                "multimodal-looker": {"model": $m},
+                "metis": {"model": $m},
+                "momus": {"model": $m},
+                "atlas": {"model": $m},
+                "sisyphus-junior": {"model": $m},
+                "OpenCode-Builder": {"model": $m}
+              })
+            | .categories = ((.categories // {}) + {
+                "visual-engineering": {"model": $m},
+                "ultrabrain": {"model": $m},
+                "deep": {"model": $m},
+                "artistry": {"model": $m},
+                "quick": {"model": $m},
+                "unspecified-low": {"model": $m},
+                "unspecified-high": {"model": $m},
+                "writing": {"model": $m}
+              })
+            ' "$OMO_JSON" > /tmp/omo.json
+          mv /tmp/omo.json "$OMO_JSON"
+      - name: Collect context
+        id: ctx
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          DISPATCH_PROMPT: ${{ inputs.prompt }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          echo "default_branch=${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "type=dispatch" >> "$GITHUB_OUTPUT"
+            echo "number=0" >> "$GITHUB_OUTPUT"
+            echo "title=Manual Dispatch" >> "$GITHUB_OUTPUT"
+            echo "author=${{ github.actor }}" >> "$GITHUB_OUTPUT"
+            echo "comment_id=" >> "$GITHUB_OUTPUT"
+            echo "comment<<EOF" >> "$GITHUB_OUTPUT"
+            echo "${DISPATCH_PROMPT:-/oc run manual task}" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ISSUE_JSON="$(gh api "repos/${REPO}/issues/${ISSUE_NUMBER}")"
+          TITLE="$(echo "$ISSUE_JSON" | jq -r '.title')"
+          if echo "$ISSUE_JSON" | jq -e '.pull_request' >/dev/null; then
+            TYPE="pr"
+          else
+            TYPE="issue"
+          fi
+          echo "type=${TYPE}" >> "$GITHUB_OUTPUT"
+          echo "number=${ISSUE_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE}" >> "$GITHUB_OUTPUT"
+          echo "author=${COMMENT_AUTHOR}" >> "$GITHUB_OUTPUT"
+          echo "comment_id=${COMMENT_ID}" >> "$GITHUB_OUTPUT"
+          echo "comment<<EOF" >> "$GITHUB_OUTPUT"
+          echo "${COMMENT_BODY}" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+      - name: Add eyes reaction
+        if: steps.ctx.outputs.comment_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "/repos/${{ github.repository }}/issues/comments/${{ steps.ctx.outputs.comment_id }}/reactions" \
+            -X POST -f content="eyes" || true
+      - name: Run oh-my-opencode on target repo only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RIGHTCODE_API_KEY: ${{ secrets.RIGHTCODE_API_KEY }}
+          RIGHTCODE_BASE_URL: ${{ secrets.RIGHTCODE_BASE_URL }}
+          RIGHTCODE_PROVIDER_ID: ${{ secrets.RIGHTCODE_PROVIDER_ID }}
+          RIGHTCODE_MODEL_ID: ${{ secrets.RIGHTCODE_MODEL_ID }}
+          USER_COMMENT: ${{ steps.ctx.outputs.comment }}
+          CONTEXT_TYPE: ${{ steps.ctx.outputs.type }}
+          CONTEXT_NUMBER: ${{ steps.ctx.outputs.number }}
+          CONTEXT_TITLE: ${{ steps.ctx.outputs.title }}
+          COMMENT_AUTHOR: ${{ steps.ctx.outputs.author }}
+          REPO_NAME: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ steps.ctx.outputs.default_branch }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.bun/bin:$HOME/.opencode/bin:$PATH"
+          if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+            COMMENT_CMD="gh pr comment ${CONTEXT_NUMBER} --repo ${REPO_NAME} --body"
+          elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
+            COMMENT_CMD="gh issue comment ${CONTEXT_NUMBER} --repo ${REPO_NAME} --body"
+          else
+            COMMENT_CMD="echo"
+          fi
+          PROMPT=$(cat <<EOF
+          [analyze-mode]
+          ANALYSIS MODE. Gather context before diving deep:
+          - Use parallel exploration (explore/librarian + direct tools)
+          - Synthesize findings
+          - Then implement fully and verify
+          Context:
+          - Repo: ${REPO_NAME}
+          - Type: ${CONTEXT_TYPE}
+          - Number: #${CONTEXT_NUMBER}
+          - Title: ${CONTEXT_TITLE}
+          - Default branch: ${DEFAULT_BRANCH}
+          - Requested by: @${COMMENT_AUTHOR}
+          User request:
+          ${USER_COMMENT}
+          Hard requirements:
+          1) User cannot see console. MUST post progress + final result as GitHub comments.
+          2) Use heredoc for multiline comments.
+          3) For code changes, NEVER push directly to ${DEFAULT_BRANCH}; use branch + PR.
+          4) Use this comment command: ${COMMENT_CMD}
+          EOF
+          )
+          # CRITICAL: force target repository as working directory
+          oh-my-opencode run \
+            --agent Sisyphus \
+            --directory "$GITHUB_WORKSPACE" \
+            --timeout 3600000 \
+            "$PROMPT"
+      - name: Replace eyes with +1
+        if: steps.ctx.outputs.comment_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REACTION_ID=$(gh api "/repos/${{ github.repository }}/issues/comments/${{ steps.ctx.outputs.comment_id }}/reactions" \
+            --jq '.[] | select(.content == "eyes" and .user.login == "github-actions[bot]") | .id' | head -1 || true)
+          if [[ -n "${REACTION_ID}" ]]; then
+            gh api -X DELETE "/repos/${{ github.repository }}/reactions/${REACTION_ID}" || true
+          fi
+          gh api "/repos/${{ github.repository }}/issues/comments/${{ steps.ctx.outputs.comment_id }}/reactions" \
+            -X POST -f content="+1" || true
