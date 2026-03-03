@@ -189,56 +189,115 @@ jobs:
           gh api "/repos/${{ github.repository }}/issues/comments/${{ steps.ctx.outputs.comment_id }}/reactions" \
             -X POST -f content="eyes" || true
       - name: Run oh-my-opencode on target repo only
+        id: omo
+        continue-on-error: true
         env:
-            GH_TOKEN: ${{ github.token }}
-            RIGHTCODE_API_KEY: ${{ secrets.RIGHTCODE_API_KEY }}
-            RIGHTCODE_BASE_URL: ${{ secrets.RIGHTCODE_BASE_URL }}
-            RIGHTCODE_PROVIDER_ID: ${{ secrets.RIGHTCODE_PROVIDER_ID }}
-            RIGHTCODE_MODEL_ID: ${{ secrets.RIGHTCODE_MODEL_ID }}
-            USER_COMMENT: ${{ steps.ctx.outputs.comment }}
-            CONTEXT_TYPE: ${{ steps.ctx.outputs.type }}
-            CONTEXT_NUMBER: ${{ steps.ctx.outputs.number }}
-            CONTEXT_TITLE: ${{ steps.ctx.outputs.title }}
-            COMMENT_AUTHOR: ${{ steps.ctx.outputs.author }}
-            REPO_NAME: ${{ github.repository }}
-            DEFAULT_BRANCH: ${{ steps.ctx.outputs.default_branch }}
-            OPENCODE_DEFAULT_AGENT: Sisyphus
+          GH_TOKEN: ${{ github.token }}
+          RIGHTCODE_API_KEY: ${{ secrets.RIGHTCODE_API_KEY }}
+          RIGHTCODE_BASE_URL: ${{ secrets.RIGHTCODE_BASE_URL }}
+          RIGHTCODE_PROVIDER_ID: ${{ secrets.RIGHTCODE_PROVIDER_ID }}
+          RIGHTCODE_MODEL_ID: ${{ secrets.RIGHTCODE_MODEL_ID }}
+          USER_COMMENT: ${{ steps.ctx.outputs.comment }}
+          CONTEXT_TYPE: ${{ steps.ctx.outputs.type }}
+          CONTEXT_NUMBER: ${{ steps.ctx.outputs.number }}
+          CONTEXT_TITLE: ${{ steps.ctx.outputs.title }}
+          COMMENT_AUTHOR: ${{ steps.ctx.outputs.author }}
+          REPO_NAME: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ steps.ctx.outputs.default_branch }}
+          OPENCODE_DEFAULT_AGENT: Sisyphus
         run: |
-            set -euo pipefail
-            export PATH="$HOME/.bun/bin:$HOME/.opencode/bin:$PATH"
-            # CRITICAL: force working dir to target repo
-            cd "$GITHUB_WORKSPACE"
-            if [[ "$CONTEXT_TYPE" == "pr" ]]; then
+          set -uo pipefail
+          export PATH="$HOME/.bun/bin:$HOME/.opencode/bin:$PATH"
+
+          # CRITICAL: force working dir to target repo
+          cd "$GITHUB_WORKSPACE"
+
+          if [[ "$CONTEXT_TYPE" == "pr" ]]; then
             COMMENT_CMD="gh pr comment ${CONTEXT_NUMBER} --repo ${REPO_NAME} --body"
-            elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
+          elif [[ "$CONTEXT_TYPE" == "issue" ]]; then
             COMMENT_CMD="gh issue comment ${CONTEXT_NUMBER} --repo ${REPO_NAME} --body"
-            else
+          else
             COMMENT_CMD="echo"
-            fi
-            PROMPT=$(cat <<EOF
-            [analyze-mode]
-            ANALYSIS MODE. Gather context before diving deep:
-            - Use parallel exploration (explore/librarian + direct tools)
-            - Synthesize findings
-            - Then implement fully and verify
-            Context:
-            - Repo: ${REPO_NAME}
-            - Type: ${CONTEXT_TYPE}
-            - Number: #${CONTEXT_NUMBER}
-            - Title: ${CONTEXT_TITLE}
-            - Default branch: ${DEFAULT_BRANCH}
-            - Requested by: @${COMMENT_AUTHOR}
-            User request:
-            ${USER_COMMENT}
-            Hard requirements:
-            1) User cannot see console. MUST post progress + final result as GitHub comments.
-            2) Use heredoc for multiline comments.
-            3) For code changes, NEVER push directly to ${DEFAULT_BRANCH}; use branch + PR.
-            4) Use this comment command: ${COMMENT_CMD}
-            EOF
-            )
-            # Do NOT pass --directory/--timeout here (compat issue)
-            oh-my-opencode run "$PROMPT"
+          fi
+
+          PROMPT=$(cat <<EOF
+          [analyze-mode]
+          ANALYSIS MODE. Gather context before diving deep:
+          - Use parallel exploration (explore/librarian + direct tools)
+          - Synthesize findings
+          - Then implement fully and verify
+
+          Context:
+          - Repo: ${REPO_NAME}
+          - Type: ${CONTEXT_TYPE}
+          - Number: #${CONTEXT_NUMBER}
+          - Title: ${CONTEXT_TITLE}
+          - Default branch: ${DEFAULT_BRANCH}
+          - Requested by: @${COMMENT_AUTHOR}
+
+          User request:
+          ${USER_COMMENT}
+
+          Hard requirements:
+          1) User cannot see console. MUST post progress + final result as GitHub comments.
+          2) Use heredoc for multiline comments.
+          3) For code changes, NEVER push directly to ${DEFAULT_BRANCH}; use branch + PR.
+          4) Use this comment command: ${COMMENT_CMD}
+          5) Before finishing, always post a final follow-up comment to the issue/PR.
+          EOF
+          )
+
+          # Keep shell alive so we can always emit deterministic final follow-up.
+          set +e
+          oh-my-opencode run "$PROMPT" 2>&1 | tee /tmp/omo-run.log
+          RUN_EXIT=${PIPESTATUS[0]}
+
+          LAST_LINE=$(awk 'NF{line=$0} END{print line}' /tmp/omo-run.log)
+          if [[ -z "$LAST_LINE" ]]; then
+            LAST_LINE="No terminal output captured."
+          fi
+
+          echo "run_exit=$RUN_EXIT" >> "$GITHUB_OUTPUT"
+          echo "last_line<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$LAST_LINE" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Deterministic final follow-up comment
+        if: always() && steps.ctx.outputs.number != '' && steps.ctx.outputs.type != 'dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          RUN_EXIT='${{ steps.omo.outputs.run_exit }}'
+          if [[ -z "$RUN_EXIT" ]]; then
+            RUN_EXIT="1"
+          fi
+
+          if [[ "$RUN_EXIT" == "0" ]]; then
+            STATE="completed"
+            ICON="[OK]"
+          else
+            STATE="failed"
+            ICON="[FAIL]"
+          fi
+
+          BODY=$(cat <<EOF
+          ${ICON} Automatic follow-up: agent run ${STATE} (exit=${RUN_EXIT}).
+
+          - Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - Last log line: ${{ steps.omo.outputs.last_line }}
+
+          If the agent only posted a progress update, this message is the guaranteed final checkpoint.
+          EOF
+          )
+
+          if [[ '${{ steps.ctx.outputs.type }}' == 'pr' ]]; then
+            gh pr comment '${{ steps.ctx.outputs.number }}' --repo '${{ github.repository }}' --body "$BODY"
+          else
+            gh issue comment '${{ steps.ctx.outputs.number }}' --repo '${{ github.repository }}' --body "$BODY"
+          fi
       - name: Replace eyes with +1
         if: steps.ctx.outputs.comment_id != ''
         env:
@@ -251,3 +310,9 @@ jobs:
           fi
           gh api "/repos/${{ github.repository }}/issues/comments/${{ steps.ctx.outputs.comment_id }}/reactions" \
             -X POST -f content="+1" || true
+
+      - name: Fail workflow if agent run failed
+        if: always() && steps.omo.outputs.run_exit != '' && steps.omo.outputs.run_exit != '0'
+        run: |
+          echo "oh-my-opencode run failed with exit code ${{ steps.omo.outputs.run_exit }}"
+          exit 1
